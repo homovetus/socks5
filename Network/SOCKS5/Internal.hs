@@ -82,7 +82,7 @@ data Command
   = Connect
   | Bind
   | UDPAssociate
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary Command where
   put :: Command -> Put
@@ -175,7 +175,7 @@ toSockAddr_ (AddressDomain host) _ = error $ "Address conversion for DomainName 
 newtype Hello = Hello
   { methods :: [Method]
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary Hello where
   put :: Hello -> Put
@@ -211,7 +211,7 @@ sendHello sock methods =
 newtype MethodSelection = MethodSelection
   { method :: Method
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary MethodSelection where
   put :: MethodSelection -> Put
@@ -258,7 +258,7 @@ data Request = Request
     destinationAddress :: Address,
     destinationPort :: PortNumber
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary Request where
   put :: Request -> Put
@@ -327,7 +327,7 @@ data Rep
   | CommandNotSupported
   | AddressTypeNotSupported
   | Unassigned Word8
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary Rep where
   put :: Rep -> Put
@@ -362,7 +362,7 @@ data Reply = Reply
     boundAddress :: Address,
     boundPort :: PortNumber
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary Reply where
   put :: Reply -> Put
@@ -415,7 +415,7 @@ data UDPRequest = UDPRequest
     port :: PortNumber,
     payload :: LB.ByteString
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance Binary UDPRequest where
   put :: UDPRequest -> Put

@@ -60,7 +60,6 @@ handleConnect (Request _ addr port) clientSock =
             forwardToClient
     concurrently_ forwardToDest forwardToClient
     putStrLn "Data forwarding complete. Closing dest connection."
-    close destSock
 
 handleBind :: Request -> Socket -> IO ()
 handleBind (Request _ _destAddr _destPort) clientSock =
@@ -69,23 +68,22 @@ handleBind (Request _ _destAddr _destPort) clientSock =
     (_, listenPort) <- fromSockAddr_ <$> getSocketName listenSock
     putStrLn $ "Listening for connections on " ++ show selfAddr ++ ":" ++ show listenPort
     sendReply clientSock Succeeded selfAddr listenPort
-    (destSock, (destAddr, destPort)) <- second fromSockAddr_ <$> accept listenSock
-    putStrLn $ "Accepted connection from " ++ show destAddr ++ ":" ++ show destPort
-    sendReply clientSock Succeeded destAddr destPort
-    let forwardToDest = do
-          clientData <- SB.recv clientSock 4096
-          unless (B.null clientData) $ do
-            SB.sendAll destSock clientData
-            forwardToDest
-    let forwardToClient = do
-          serverData <- SB.recv destSock 4096
-          unless (B.null serverData) $ do
-            SB.sendAll clientSock serverData
-            forwardToClient
-    concurrently_ forwardToDest forwardToClient
-    putStrLn "Data forwarding complete. Closing dest connection."
-    close destSock
-    close listenSock
+    bracket (accept listenSock) (\(destSock, _) -> close destSock) $ \(destSock, destSockAddr) -> do
+      let (destAddr, destPort) = fromSockAddr_ destSockAddr
+      putStrLn $ "Accepted connection from " ++ show destAddr ++ ":" ++ show destPort
+      sendReply clientSock Succeeded destAddr destPort
+      let forwardToDest = do
+            clientData <- SB.recv clientSock 4096
+            unless (B.null clientData) $ do
+              SB.sendAll destSock clientData
+              forwardToDest
+      let forwardToClient = do
+            serverData <- SB.recv destSock 4096
+            unless (B.null serverData) $ do
+              SB.sendAll clientSock serverData
+              forwardToClient
+      concurrently_ forwardToDest forwardToClient
+      putStrLn "Data forwarding complete. Closing dest connection."
   where
     newTCPSocket host = do
       addrInfo <- head <$> getAddrInfo (Just defaultHints {addrFlags = [AI_PASSIVE], addrSocketType = Stream}) (Just host) (Just "0")
