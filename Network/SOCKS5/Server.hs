@@ -9,8 +9,9 @@ where
 import Control.Concurrent.Async
 import Control.Exception
 import Control.Monad
+import Control.Monad.State
 import Data.Bifunctor
-import Data.Binary
+import Data.Binary (Binary, decode)
 import Data.ByteString qualified as B
 import Data.ByteString.Lazy qualified as LB
 import Data.IORef
@@ -21,6 +22,8 @@ import Network.Socket
 import Network.Socket.ByteString qualified as SB
 import System.IO.Error
 
+type StateIO a = StateT B.ByteString IO a
+
 runSOCKS5Server :: HostName -> ServiceName -> IO ()
 runSOCKS5Server host port = do
   putStrLn $ "Starting SOCKS5 server on " ++ host ++ ":" ++ port
@@ -30,48 +33,28 @@ runSOCKS5Server host port = do
     handle (\(e :: SomeException) -> putStrLn $ show clientAddr ++ ": " ++ show e) $ newClient sockTCP
 
 newClient :: Socket -> IO ()
-newClient clientSock = do
-  auths <- NE.fromList . methods <$> recvHello clientSock
-  unless (NoAuth `elem` auths) $ throwIO NoAcceptableAuthMethods
-  sendMethodSelection clientSock NoAuth
-  req <- recvRequest clientSock
-  putStrLn $ "Received SOCKS5 Request: " ++ show req
-  case command req of
-    Connect -> handleConnect req clientSock
-    Bind -> handleBind req clientSock
-    UDPAssociate -> handleUDPAssociate req clientSock
+newClient clientSock = void $ runStateT start B.empty
+  where
+    start :: StateIO ()
+    start = do
+      auths <- methods <$> recvS clientSock
+      unless (NoAuth `elem` auths) $ liftIO $ throwIO NoAcceptableAuthMethods
+      liftIO $ sendMethodSelection clientSock NoAuth
+      req <- recvS clientSock
+      liftIO $ putStrLn $ "Received SOCKS5 Request: " ++ show req
+      case command req of
+        Connect -> handleConnect req clientSock
+        Bind -> handleBind req clientSock
+        UDPAssociate -> handleUDPAssociate req clientSock
 
-handleConnect :: Request -> Socket -> IO ()
-handleConnect (Request _ addr port) clientSock =
-  handle (replyError clientSock) $ runTCPClient (show addr) (show port) $ \destSock -> do
-    putStrLn "Successfully connected to destination server."
-    (selfAddr, selfPort) <- fromSockAddr_ <$> getSocketName clientSock
-    sendReply clientSock Succeeded selfAddr selfPort
-    putStrLn $ "Sent SOCKS5 Reply: Succeeded, bound to " ++ show selfAddr ++ ":" ++ show selfPort
-    let forwardToDest = do
-          clientData <- SB.recv clientSock 4096
-          unless (B.null clientData) $ do
-            SB.sendAll destSock clientData
-            forwardToDest
-    let forwardToClient = do
-          serverData <- SB.recv destSock 4096
-          unless (B.null serverData) $ do
-            SB.sendAll clientSock serverData
-            forwardToClient
-    concurrently_ forwardToDest forwardToClient
-    putStrLn "Data forwarding complete. Closing dest connection."
-
-handleBind :: Request -> Socket -> IO ()
-handleBind (Request _ _destAddr _destPort) clientSock =
-  handle (replyError clientSock) $ bracket (newTCPSocket "0.0.0.0") close $ \listenSock -> do
-    (selfAddr, _) <- fromSockAddr_ <$> getSocketName clientSock
-    (_, listenPort) <- fromSockAddr_ <$> getSocketName listenSock
-    putStrLn $ "Listening for connections on " ++ show selfAddr ++ ":" ++ show listenPort
-    sendReply clientSock Succeeded selfAddr listenPort
-    bracket (accept listenSock) (\(destSock, _) -> close destSock) $ \(destSock, destSockAddr) -> do
-      let (destAddr, destPort) = fromSockAddr_ destSockAddr
-      putStrLn $ "Accepted connection from " ++ show destAddr ++ ":" ++ show destPort
-      sendReply clientSock Succeeded destAddr destPort
+handleConnect :: Request -> Socket -> StateIO ()
+handleConnect (Request _ addr port) clientSock = liftIO $
+  handle (replyError clientSock) $
+    runTCPClient (show addr) (show port) $ \destSock -> do
+      putStrLn "Successfully connected to destination server."
+      (selfAddr, selfPort) <- fromSockAddr_ <$> getSocketName clientSock
+      sendReply clientSock Succeeded selfAddr selfPort
+      putStrLn $ "Sent SOCKS5 Reply: Succeeded, bound to " ++ show selfAddr ++ ":" ++ show selfPort
       let forwardToDest = do
             clientData <- SB.recv clientSock 4096
             unless (B.null clientData) $ do
@@ -84,6 +67,31 @@ handleBind (Request _ _destAddr _destPort) clientSock =
               forwardToClient
       concurrently_ forwardToDest forwardToClient
       putStrLn "Data forwarding complete. Closing dest connection."
+
+handleBind :: Request -> Socket -> StateIO ()
+handleBind (Request _ _destAddr _destPort) clientSock = liftIO $
+  handle (replyError clientSock) $
+    bracket (newTCPSocket "0.0.0.0") close $ \listenSock -> do
+      (selfAddr, _) <- fromSockAddr_ <$> getSocketName clientSock
+      (_, listenPort) <- fromSockAddr_ <$> getSocketName listenSock
+      putStrLn $ "Listening for connections on " ++ show selfAddr ++ ":" ++ show listenPort
+      sendReply clientSock Succeeded selfAddr listenPort
+      bracket (accept listenSock) (\(destSock, _) -> close destSock) $ \(destSock, destSockAddr) -> do
+        let (destAddr, destPort) = fromSockAddr_ destSockAddr
+        putStrLn $ "Accepted connection from " ++ show destAddr ++ ":" ++ show destPort
+        sendReply clientSock Succeeded destAddr destPort
+        let forwardToDest = do
+              clientData <- SB.recv clientSock 4096
+              unless (B.null clientData) $ do
+                SB.sendAll destSock clientData
+                forwardToDest
+        let forwardToClient = do
+              serverData <- SB.recv destSock 4096
+              unless (B.null serverData) $ do
+                SB.sendAll clientSock serverData
+                forwardToClient
+        concurrently_ forwardToDest forwardToClient
+        putStrLn "Data forwarding complete. Closing dest connection."
   where
     newTCPSocket host = do
       addrInfo <- head <$> getAddrInfo (Just defaultHints {addrFlags = [AI_PASSIVE], addrSocketType = Stream}) (Just host) (Just "0")
@@ -98,26 +106,27 @@ handleBind (Request _ _destAddr _destPort) clientSock =
 -- arriving from any source IP address other than the one recorded for
 -- the particular association.
 
-handleUDPAssociate :: Request -> Socket -> IO ()
-handleUDPAssociate (Request _ destAddr destPort) clientSock =
-  handle (replyError clientSock) $ bracket (newUDPSocket "0.0.0.0") close $ \relaySock -> do
-    (selfAddr, _) <- fromSockAddr_ <$> getSocketName clientSock
-    (_, relayPort) <- fromSockAddr_ <$> getSocketName relaySock
-    sendReply clientSock Succeeded selfAddr relayPort
-    (expectedClient, _) <- fromSockAddr_ <$> getPeerName clientSock
-    putStrLn $ "UDP association created for " ++ show expectedClient ++ ". Relaying on port " ++ show relayPort ++ "."
-    -- If the client is not in possesion of the information at the time of the UDP
-    -- ASSOCIATE, the client MUST use a port number and address of all zeros.
-    let expectedDest = case (destAddr, destPort) of
-          (AddressIPv4 "0.0.0.0", 0) -> Nothing
-          (AddressIPv6 "::", 0) -> Nothing
-          (AddressDomain _, _) -> Nothing
-          _ -> Just destAddr
-    -- A UDP association terminates when the TCP connection that the UDP ASSOCIATE request arrived on terminates.
-    withAsync (forwardUDP expectedClient expectedDest relaySock) $ \_ -> do
-      putStrLn "UDP association active. Waiting for TCP control connection to close."
-      waitForTCPClose clientSock
-    putStrLn "TCP control connection closed. Terminating UDP association."
+handleUDPAssociate :: Request -> Socket -> StateIO ()
+handleUDPAssociate (Request _ destAddr destPort) clientSock = liftIO $
+  handle (replyError clientSock) $
+    bracket (newUDPSocket "0.0.0.0") close $ \relaySock -> do
+      (selfAddr, _) <- fromSockAddr_ <$> getSocketName clientSock
+      (_, relayPort) <- fromSockAddr_ <$> getSocketName relaySock
+      sendReply clientSock Succeeded selfAddr relayPort
+      (expectedClient, _) <- fromSockAddr_ <$> getPeerName clientSock
+      putStrLn $ "UDP association created for " ++ show expectedClient ++ ". Relaying on port " ++ show relayPort ++ "."
+      -- If the client is not in possesion of the information at the time of the UDP
+      -- ASSOCIATE, the client MUST use a port number and address of all zeros.
+      let expectedDest = case (destAddr, destPort) of
+            (AddressIPv4 "0.0.0.0", 0) -> Nothing
+            (AddressIPv6 "::", 0) -> Nothing
+            (AddressDomain _, _) -> Nothing
+            _ -> Just destAddr
+      -- A UDP association terminates when the TCP connection that the UDP ASSOCIATE request arrived on terminates.
+      withAsync (forwardUDP expectedClient expectedDest relaySock) $ \_ -> do
+        putStrLn "UDP association active. Waiting for TCP control connection to close."
+        waitForTCPClose clientSock
+      putStrLn "TCP control connection closed. Terminating UDP association."
   where
     newUDPSocket host = do
       addrInfo <- head <$> getAddrInfo (Just defaultHints {addrFlags = [AI_PASSIVE], addrSocketType = Datagram}) (Just host) (Just "0")
@@ -173,3 +182,10 @@ replyError sock e = do
   putStrLn $ "Replying with error: " ++ show rep
   sendReply sock rep (AddressIPv4 "0.0.0.0") 0
   throwIO e
+
+recvS :: (Binary a) => Socket -> StateIO a
+recvS sock = do
+  buffer <- get
+  (val, left) <- liftIO $ recvAndDecode sock buffer
+  put left
+  return val

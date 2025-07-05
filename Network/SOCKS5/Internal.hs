@@ -5,22 +5,18 @@ module Network.SOCKS5.Internal
     fromSockAddr_,
     toSockAddr_,
     Hello (..),
-    recvHello,
     sendHello,
     MethodSelection (..),
-    recvMethodSelection,
     sendMethodSelection,
     Request (..),
-    recvRequest,
     sendRequest,
     Rep (..),
     Reply (..),
-    recvReply,
     sendReply,
     UDPRequest (..),
-    recvUDPRequest,
     sendUDPRequestTo,
     SOCKSException (..),
+    recvAndDecode,
   )
 where
 
@@ -29,6 +25,7 @@ import Control.Monad
 import Data.Binary
 import Data.Binary.Get
 import Data.Binary.Put
+import Data.ByteString qualified as B
 import Data.ByteString.Lazy qualified as LB
 import Data.IP
 import Data.Text.Lazy qualified as LT
@@ -191,11 +188,6 @@ instance Binary Hello where
     methods <- replicateM (fromIntegral nMethods) get
     return $ Hello methods
 
-recvHello :: Socket -> IO Hello
-recvHello sock = do
-  lazyBytes <- getContents sock
-  return $ decode lazyBytes
-
 sendHello :: Socket -> [Method] -> IO ()
 sendHello sock methods =
   sendAll sock $ encode $ Hello methods
@@ -223,11 +215,6 @@ instance Binary MethodSelection where
   get = do
     void getWord8
     MethodSelection <$> get
-
-recvMethodSelection :: Socket -> IO MethodSelection
-recvMethodSelection sock = do
-  lazyBytes <- getContents sock
-  return $ decode lazyBytes
 
 sendMethodSelection :: Socket -> Method -> IO ()
 sendMethodSelection sock method =
@@ -278,11 +265,6 @@ instance Binary Request where
     port <- getWord16be
     let destinationPort = fromIntegral port
     return $ Request command address destinationPort
-
-recvRequest :: Socket -> IO Request
-recvRequest sock = do
-  lazyBytes <- getContents sock
-  return $ decode lazyBytes
 
 sendRequest :: Socket -> Command -> Address -> PortNumber -> IO ()
 sendRequest sock command address port =
@@ -383,11 +365,6 @@ instance Binary Reply where
     let boundPort = fromIntegral port
     return $ Reply reply address boundPort
 
-recvReply :: Socket -> IO Reply
-recvReply sock = do
-  lazyBytes <- getContents sock
-  return $ decode lazyBytes
-
 sendReply :: Socket -> Rep -> Address -> PortNumber -> IO ()
 sendReply sock rep bindAddress boundPort =
   sendAll sock $ encode $ Reply rep bindAddress boundPort
@@ -435,11 +412,6 @@ instance Binary UDPRequest where
     let portNum = fromIntegral port
     UDPRequest frag addr portNum <$> getRemainingLazyByteString
 
-recvUDPRequest :: Socket -> IO UDPRequest
-recvUDPRequest sock = do
-  lazyBytes <- getContents sock
-  return $ decode lazyBytes
-
 sendUDPRequestTo :: Socket -> Word8 -> Address -> PortNumber -> LB.ByteString -> SockAddr -> IO ()
 sendUDPRequestTo sock frag addr port payload =
   SB.sendAllTo sock $ LB.toStrict $ encode $ UDPRequest frag addr port payload
@@ -453,3 +425,15 @@ data SOCKSException
   deriving (Show)
 
 instance Exception SOCKSException
+
+recvAndDecode :: (Binary a) => Socket -> B.ByteString -> IO (a, B.ByteString)
+recvAndDecode sock buffer = go $ pushChunk (runGetIncremental get) buffer
+  where
+    go :: Decoder a -> IO (a, B.ByteString)
+    go (Done left _ val) = return (val, left)
+    go (Fail _ _ err) = throwIO $ userError $ "SOCKS5 parse error: " ++ err
+    go (Partial k) = do
+      chunk <- SB.recv sock 4096
+      if B.null chunk
+        then go (k Nothing)
+        else go (k (Just chunk))
