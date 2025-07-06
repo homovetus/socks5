@@ -5,18 +5,16 @@ module Network.SOCKS5.Internal
     fromSockAddr_,
     toSockAddr_,
     Hello (..),
-    sendHello,
     MethodSelection (..),
-    sendMethodSelection,
     Request (..),
-    sendRequest,
     Rep (..),
     Reply (..),
-    sendReply,
     UDPRequest (..),
     sendUDPRequestTo,
     SOCKSException (..),
+    Connection (..),
     recvAndDecode,
+    encodeAndSend,
   )
 where
 
@@ -32,7 +30,8 @@ import Data.Text.Lazy qualified as LT
 import Data.Text.Lazy.Encoding qualified as LTE
 import Network.Socket
 import Network.Socket.ByteString qualified as SB
-import Network.Socket.ByteString.Lazy
+import Network.Socket.ByteString.Lazy qualified as LSB
+import Network.TLS
 import Prelude hiding (getContents)
 
 --  The values currently defined for METHOD are:
@@ -188,10 +187,6 @@ instance Binary Hello where
     methods <- replicateM (fromIntegral nMethods) get
     return $ Hello methods
 
-sendHello :: Socket -> [Method] -> IO ()
-sendHello sock methods =
-  sendAll sock $ encode $ Hello methods
-
 --  The server selects from one of the methods given in METHODS, and
 --  sends a METHOD selection message:
 --    +-----+--------+
@@ -215,10 +210,6 @@ instance Binary MethodSelection where
   get = do
     void getWord8
     MethodSelection <$> get
-
-sendMethodSelection :: Socket -> Method -> IO ()
-sendMethodSelection sock method =
-  sendAll sock $ encode $ MethodSelection method
 
 --  The SOCKS request is formed as follows:
 --    +-----+-----+-------+------+----------+----------+
@@ -265,10 +256,6 @@ instance Binary Request where
     port <- getWord16be
     let destinationPort = fromIntegral port
     return $ Request command address destinationPort
-
-sendRequest :: Socket -> Command -> Address -> PortNumber -> IO ()
-sendRequest sock command address port =
-  sendAll sock $ encode $ Request command address port
 
 --  The server evaluates the request, and
 --  returns a reply formed as follows:
@@ -365,10 +352,6 @@ instance Binary Reply where
     let boundPort = fromIntegral port
     return $ Reply reply address boundPort
 
-sendReply :: Socket -> Rep -> Address -> PortNumber -> IO ()
-sendReply sock rep bindAddress boundPort =
-  sendAll sock $ encode $ Reply rep bindAddress boundPort
-
 --  Each UDP datagram carries a UDP request header with it:
 --    +-----+------+------+----------+----------+----------+
 --    | RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
@@ -426,14 +409,36 @@ data SOCKSException
 
 instance Exception SOCKSException
 
-recvAndDecode :: (Binary a) => Socket -> B.ByteString -> IO (a, B.ByteString)
-recvAndDecode sock buffer = go $ pushChunk (runGetIncremental get) buffer
+class Connection c where
+  connRecv :: c -> IO B.ByteString
+  connSend :: c -> LB.ByteString -> IO ()
+
+instance Connection Socket where
+  connRecv :: Socket -> IO B.ByteString
+  connRecv sock = SB.recv sock 4096
+
+  connSend :: Socket -> LB.ByteString -> IO ()
+  connSend = LSB.sendAll
+
+instance Connection Context where
+  connRecv :: Context -> IO B.ByteString
+  connRecv = recvData
+
+  connSend :: Context -> LB.ByteString -> IO ()
+  connSend = sendData
+
+recvAndDecode :: (Binary a, Connection c) => c -> B.ByteString -> IO (a, B.ByteString)
+recvAndDecode conn buffer = go $ pushChunk (runGetIncremental get) buffer
   where
     go :: Decoder a -> IO (a, B.ByteString)
     go (Done left _ val) = return (val, left)
     go (Fail _ _ err) = throwIO $ userError $ "SOCKS5 parse error: " ++ err
     go (Partial k) = do
-      chunk <- SB.recv sock 4096
+      chunk <- connRecv conn
       if B.null chunk
         then go (k Nothing)
         else go (k (Just chunk))
+
+encodeAndSend :: (Binary a, Connection c) => c -> a -> IO ()
+encodeAndSend conn val = do
+  connSend conn $ encode val

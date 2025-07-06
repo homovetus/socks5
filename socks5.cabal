@@ -29,11 +29,13 @@ library
     base ^>=4.18,
     binary ^>=0.8,
     bytestring ^>=0.12,
+    data-default ^>=0.8,
     iproute ^>=1.7,
     mtl ^>=2.3,
     network ^>=3.2,
     network-run ^>=0.4,
     text ^>=2.1,
+    tls ^>=2.1,
 
   default-language: GHC2021
 
@@ -42,6 +44,7 @@ executable server
   main-is: Main.hs
   build-depends:
     base ^>=4.18,
+    optparse-applicative ^>=0.19,
     socks5,
 
   hs-source-dirs: server
@@ -60,8 +63,10 @@ test-suite socks5-test
   build-depends:
     async ^>=2.2,
     base ^>=4.18,
+    binary ^>=0.8,
     bytestring ^>=0.12,
     hspec ^>=2.11,
+    mtl ^>=2.3,
     network ^>=3.2,
     network-run ^>=0.4,
     socks5,
