@@ -34,7 +34,7 @@ data ServerConfig = ServerConfig
     keyFile :: FilePath
   }
 
-type StateIO b a = StateT b IO a
+type StateIO a = StateT B.ByteString IO a
 
 runSOCKS5Server :: ServerConfig -> IO ()
 runSOCKS5Server config = do
@@ -70,11 +70,11 @@ newClient :: (Connection c) => c -> Socket -> IO ()
 newClient conn clientSock = do
   void $ runStateT newConn B.empty
   where
-    newConn :: StateIO B.ByteString ()
+    newConn :: StateIO ()
     newConn = do
       auths <- methods <$> recvS conn
       unless (NoAuth `elem` auths) $ liftIO $ throwIO NoAcceptableAuthMethods
-      liftIO $ encodeAndSend conn $ MethodSelection NoAuth
+      encodeAndSend conn $ MethodSelection NoAuth
       req <- recvS conn
       liftIO $ putStrLn $ "Received SOCKS5 Request: " ++ show req
       case command req of
@@ -205,6 +205,13 @@ forwardUDP expectedClientAddr expectedDestAddr relaySock = do
       let (remoteAddr, remotePort) = fromSockAddr_ sourceSockAddr
       sendUDPRequestTo relaySock 0 remoteAddr remotePort datagram clientSockAddr
 
+recvS :: (Binary b, Connection c) => c -> StateIO b
+recvS conn = do
+  buffer <- get
+  (val, left) <- liftIO $ recvAndDecode conn buffer
+  put left
+  return val
+
 replyError :: (Connection c) => c -> SomeException -> IO ()
 replyError conn e = do
   let rep = case fromException e of
@@ -217,10 +224,3 @@ replyError conn e = do
   putStrLn $ "Replying with error: " ++ show rep
   encodeAndSend conn $ Reply rep (AddressIPv4 "0.0.0.0") 0
   throwIO e
-
-recvS :: (Binary b, Connection c) => c -> StateIO B.ByteString b
-recvS conn = do
-  buffer <- get
-  (val, left) <- liftIO $ recvAndDecode conn buffer
-  put left
-  return val

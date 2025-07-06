@@ -42,7 +42,7 @@ main = hspec $ do
       it "should run TCP connect successfully to ipinfo.io" $ \proxyConfig -> do
         let destAddr = AddressDomain "ipinfo.io"
             destPort = "80"
-        runTCPConnect proxyConfig destAddr destPort $ \sock -> do
+        runTCPConnect destAddr destPort proxyConfig $ \sock -> do
           let request = C8.pack "GET / HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n"
           putStrLn "Sending HTTP GET request..."
           sendAll sock request

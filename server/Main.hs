@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 import Network.SOCKS5.Server
 import Options.Applicative
 

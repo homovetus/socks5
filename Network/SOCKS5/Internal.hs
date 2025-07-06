@@ -20,6 +20,7 @@ where
 
 import Control.Exception
 import Control.Monad
+import Control.Monad.State (MonadIO (liftIO))
 import Data.Binary
 import Data.Binary.Get
 import Data.Binary.Put
@@ -427,8 +428,8 @@ instance Connection Context where
   connSend :: Context -> LB.ByteString -> IO ()
   connSend = sendData
 
-recvAndDecode :: (Binary a, Connection c) => c -> B.ByteString -> IO (a, B.ByteString)
-recvAndDecode conn buffer = go $ pushChunk (runGetIncremental get) buffer
+recvAndDecode :: (Binary a, Connection c, MonadIO m) => c -> B.ByteString -> m (a, B.ByteString)
+recvAndDecode conn buffer = liftIO $ go $ pushChunk (runGetIncremental get) buffer
   where
     go :: Decoder a -> IO (a, B.ByteString)
     go (Done left _ val) = return (val, left)
@@ -439,6 +440,6 @@ recvAndDecode conn buffer = go $ pushChunk (runGetIncremental get) buffer
         then go (k Nothing)
         else go (k (Just chunk))
 
-encodeAndSend :: (Binary a, Connection c) => c -> a -> IO ()
+encodeAndSend :: (Binary a, Connection c, MonadIO m) => c -> a -> m ()
 encodeAndSend conn val = do
-  connSend conn $ encode val
+  liftIO $ connSend conn $ encode val

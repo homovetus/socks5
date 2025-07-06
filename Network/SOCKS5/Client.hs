@@ -16,7 +16,6 @@ import Control.Exception
 import Control.Monad.State
 import Data.Binary (Binary, decode)
 import Data.ByteString qualified as B
-import Data.Default
 import Network.Run.TCP
 import Network.Run.UDP
 import Network.SOCKS5.Internal
@@ -33,38 +32,35 @@ data ClientConfig = ClientConfig
 
 type StateIO a = StateT B.ByteString IO a
 
-runTCPConnect :: forall a. ClientConfig -> Address -> ServiceName -> (Socket -> IO a) -> IO a
-runTCPConnect config destAddr destPort client = do
+runTCPConnect :: forall a. Address -> ServiceName -> ClientConfig -> (Socket -> IO a) -> IO a
+runTCPConnect destAddr destPort config client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
     evalStateT (startConnect sock) B.empty
   where
     startConnect :: Socket -> StateIO a
     startConnect sock = do
       performAuth config sock
-      portNum <- liftIO $ resolvePort destPort
-      liftIO $ encodeAndSend sock $ Request Connect destAddr portNum
+      portNum <- resolvePort destPort
+      encodeAndSend sock $ Request Connect destAddr portNum
       reply <- recvS sock
       case reply of
         Reply Succeeded _ _ -> liftIO $ client sock
         _ -> liftIO $ throwIO $ HandshakeFail reply
 
-runTCPConnectTLS :: forall a. ClientConfig -> Address -> ServiceName -> (Context -> IO a) -> IO a
-runTCPConnectTLS config destAddr destPort client = do
+runTCPConnectTLS :: forall a. ClientConfig -> Address -> ServiceName -> ClientParams -> (Context -> IO a) -> IO a
+runTCPConnectTLS config destAddr destPort params client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
-    evalStateT (startConnect sock) B.empty
+    ctx <- contextNew sock params
+    handshake ctx
+    res <- evalStateT (startConnect ctx) B.empty
+    bye ctx
+    return res
   where
-    startConnect :: Socket -> StateIO a
-    startConnect sock = do
-      let params =
-            (defaultParamsClient (proxyHost config) B.empty)
-              { clientShared =
-                  def {sharedValidationCache = ValidationCache (\_ _ _ -> return ValidationCachePass) (\_ _ _ -> return ())}
-              }
-      ctx <- liftIO $ contextNew sock params
-      liftIO $ handshake ctx
+    startConnect :: Context -> StateIO a
+    startConnect ctx = do
       performAuth config ctx
-      portNum <- liftIO $ resolvePort destPort
-      liftIO $ encodeAndSend ctx $ Request Connect destAddr portNum
+      portNum <- resolvePort destPort
+      encodeAndSend ctx $ Request Connect destAddr portNum
       reply <- recvS ctx
       case reply of
         Reply Succeeded _ _ -> liftIO $ client ctx
@@ -72,21 +68,21 @@ runTCPConnectTLS config destAddr destPort client = do
 
 runTCPBind ::
   forall a.
-  ClientConfig ->
   Address ->
   ServiceName ->
+  ClientConfig ->
   (Address -> PortNumber -> IO ()) ->
   (Address -> PortNumber -> Socket -> IO a) ->
   IO a
-runTCPBind config destAddr destPort notify client = do
+runTCPBind destAddr destPort config notify client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
     evalStateT (startBind sock) B.empty
   where
     startBind :: Socket -> StateIO a
     startBind sock = do
       performAuth config sock
-      portNum <- liftIO $ resolvePort destPort
-      liftIO $ encodeAndSend sock $ Request Bind destAddr portNum
+      portNum <- resolvePort destPort
+      encodeAndSend sock $ Request Bind destAddr portNum
       reply1 <- recvS sock
       case reply1 of
         Reply Succeeded listenAddr listenPort -> do
@@ -100,28 +96,26 @@ runTCPBind config destAddr destPort notify client = do
 
 runTCPBindTLS ::
   forall a.
-  ClientConfig ->
   Address ->
   ServiceName ->
+  ClientConfig ->
+  ClientParams ->
   (Address -> PortNumber -> IO ()) ->
   (Address -> PortNumber -> Context -> IO a) ->
   IO a
-runTCPBindTLS config destAddr destPort notify client = do
+runTCPBindTLS destAddr destPort config params notify client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
-    evalStateT (startBind sock) B.empty
+    ctx <- contextNew sock params
+    handshake ctx
+    res <- evalStateT (startBind ctx) B.empty
+    bye ctx
+    return res
   where
-    startBind :: Socket -> StateIO a
-    startBind sock = do
-      let params =
-            (defaultParamsClient (proxyHost config) B.empty)
-              { clientShared =
-                  def {sharedValidationCache = ValidationCache (\_ _ _ -> return ValidationCachePass) (\_ _ _ -> return ())}
-              }
-      ctx <- liftIO $ contextNew sock params
-      liftIO $ handshake ctx
+    startBind :: Context -> StateIO a
+    startBind ctx = do
       performAuth config ctx
-      portNum <- liftIO $ resolvePort destPort
-      liftIO $ encodeAndSend ctx $ Request Bind destAddr portNum
+      portNum <- resolvePort destPort
+      encodeAndSend ctx $ Request Bind destAddr portNum
       reply1 <- recvS ctx
       case reply1 of
         Reply Succeeded listenAddr listenPort -> do
@@ -141,7 +135,7 @@ runUDPAssociate config client = do
     startUDPAssociate :: Socket -> StateIO a
     startUDPAssociate sockTCP = do
       performAuth config sockTCP
-      liftIO $ encodeAndSend sockTCP $ Request UDPAssociate (AddressIPv4 "0.0.0.0") 0
+      encodeAndSend sockTCP $ Request UDPAssociate (AddressIPv4 "0.0.0.0") 0
       reply <- recvS sockTCP
       case reply of
         Reply Succeeded relayAddr relayPort -> liftIO $ do
@@ -159,22 +153,19 @@ runUDPAssociate config client = do
             client sendDataTo recvDataFrom
         _ -> liftIO $ throwIO $ HandshakeFail reply
 
-runUDPAssociateTLS :: forall a. ClientConfig -> ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) -> IO a
-runUDPAssociateTLS config client = do
+runUDPAssociateTLS :: forall a. ClientConfig -> ClientParams -> ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) -> IO a
+runUDPAssociateTLS config params client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sockTCP -> do
-    evalStateT (startUDPAssociate sockTCP) B.empty
+    ctx <- contextNew sockTCP params
+    handshake ctx
+    res <- evalStateT (startUDPAssociate ctx) B.empty
+    bye ctx
+    return res
   where
-    startUDPAssociate :: Socket -> StateIO a
-    startUDPAssociate sockTCP = do
-      let params =
-            (defaultParamsClient (proxyHost config) B.empty)
-              { clientShared =
-                  def {sharedValidationCache = ValidationCache (\_ _ _ -> return ValidationCachePass) (\_ _ _ -> return ())}
-              }
-      ctx <- liftIO $ contextNew sockTCP params
-      liftIO $ handshake ctx
+    startUDPAssociate :: Context -> StateIO a
+    startUDPAssociate ctx = do
       performAuth config ctx
-      liftIO $ encodeAndSend ctx $ Request UDPAssociate (AddressIPv4 "0.0.0.0") 0
+      encodeAndSend ctx $ Request UDPAssociate (AddressIPv4 "0.0.0.0") 0
       reply <- recvS ctx
       case reply of
         Reply Succeeded relayAddr relayPort -> liftIO $ do
@@ -192,22 +183,23 @@ runUDPAssociateTLS config client = do
             client sendDataTo recvDataFrom
         _ -> liftIO $ throwIO $ HandshakeFail reply
 
-resolvePort :: ServiceName -> IO PortNumber
-resolvePort port = case readMaybe port of
-  Just p -> return p
-  Nothing -> throwIO $ PortStringInvalid port
-
 performAuth :: (Connection c) => ClientConfig -> c -> StateIO ()
 performAuth config conn = do
-  liftIO $ encodeAndSend conn $ Hello [auth config]
+  encodeAndSend conn $ Hello [auth config]
   selectedMethod <- recvS conn
   case method selectedMethod of
     NoAuth -> return ()
     _ -> liftIO $ throwIO $ AuthUnsupported (method selectedMethod)
 
+resolvePort :: ServiceName -> StateIO PortNumber
+resolvePort port = liftIO $
+  case readMaybe port of
+    Just p -> return p
+    Nothing -> throwIO $ PortStringInvalid port
+
 recvS :: (Binary b, Connection c) => c -> StateIO b
 recvS conn = do
   buffer <- get
-  (val, left) <- liftIO $ recvAndDecode conn buffer
+  (val, left) <- recvAndDecode conn buffer
   put left
   return val
