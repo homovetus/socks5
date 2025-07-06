@@ -2,8 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Network.SOCKS5.Server
-  ( runSOCKS5Server,
-    ServerConfig (..),
+  ( ServerConfig (..),
+    runSOCKS5Server,
   )
 where
 
