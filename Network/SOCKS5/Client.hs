@@ -33,7 +33,6 @@ data ClientConfig = ClientConfig
 type StateIO a = StateT B.ByteString IO a
 
 runTCPConnect ::
-  forall a.
   Address ->
   ServiceName ->
   ClientConfig ->
@@ -44,7 +43,6 @@ runTCPConnect destAddr destPort config client = do
     startConnect destAddr destPort config sock client
 
 runTCPConnectTLS ::
-  forall a.
   Address ->
   ServiceName ->
   ClientConfig ->
@@ -78,7 +76,6 @@ startConnect destAddr destPort config conn client =
       _ -> liftIO $ throwIO $ HandshakeFail reply
 
 runTCPBind ::
-  forall a.
   Address ->
   ServiceName ->
   ClientConfig ->
@@ -90,7 +87,6 @@ runTCPBind destAddr destPort config notify client = do
     startBind destAddr destPort config sock notify client
 
 runTCPBindTLS ::
-  forall a.
   Address ->
   ServiceName ->
   ClientConfig ->
@@ -132,7 +128,6 @@ startBind destAddr destPort config conn notify client =
       _ -> liftIO $ throwIO $ HandshakeFail reply1
 
 runUDPAssociate ::
-  forall a.
   ClientConfig ->
   ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
   IO a
@@ -141,7 +136,6 @@ runUDPAssociate config client = do
     startUDPAssociate config sockTCP client
 
 runUDPAssociateTLS ::
-  forall a.
   ClientConfig ->
   ClientParams ->
   ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
