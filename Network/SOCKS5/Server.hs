@@ -68,19 +68,16 @@ runSOCKS5Server config = do
 
 newClient :: (Connection c) => c -> Socket -> IO ()
 newClient conn clientSock = do
-  void $ runStateT newConn B.empty
-  where
-    newConn :: StateIO ()
-    newConn = do
-      auths <- methods <$> recvS conn
-      unless (NoAuth `elem` auths) $ liftIO $ throwIO NoAcceptableAuthMethods
-      encodeAndSend conn $ MethodSelection NoAuth
-      req <- recvS conn
-      liftIO $ putStrLn $ "Received SOCKS5 Request: " ++ show req
-      case command req of
-        Connect -> liftIO $ handleConnect req conn clientSock
-        Bind -> liftIO $ handleBind req conn clientSock
-        UDPAssociate -> liftIO $ handleUDPAssociate req conn clientSock
+  void $ flip runStateT B.empty $ do
+    auths <- methods <$> recvS conn
+    unless (NoAuth `elem` auths) $ liftIO $ throwIO NoAcceptableAuthMethods
+    encodeAndSend conn $ MethodSelection NoAuth
+    req <- recvS conn
+    liftIO $ putStrLn $ "Received SOCKS5 Request: " ++ show req
+    case command req of
+      Connect -> liftIO $ handleConnect req conn clientSock
+      Bind -> liftIO $ handleBind req conn clientSock
+      UDPAssociate -> liftIO $ handleUDPAssociate req conn clientSock
 
 handleConnect :: (Connection c) => Request -> c -> Socket -> IO ()
 handleConnect (Request _ addr port) conn clientSock = do
