@@ -46,7 +46,7 @@ library
 
   default-language: GHC2021
 
-executable server
+executable socks5
   import: warnings
   main-is: Main.hs
   build-depends:
@@ -60,7 +60,7 @@ executable server
   hs-source-dirs: server
   default-language: GHC2021
 
-executable example
+executable socks5-example
   import: warnings
   main-is: Main.hs
   build-depends:
