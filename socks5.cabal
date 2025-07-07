@@ -1,16 +1,23 @@
 cabal-version: 3.0
 name: socks5
 version: 0.4.0.0
-synopsis: SOCKS5 protocol library, supporting both client and server functionalities.
-description: This package provides an implementation of the SOCKS5 protocol (RFC 1928). It contains modules for creating SOCKS5 clients and servers. The library offers functions to add SOCKS5 proxy support to Haskell applications. A server executable is included to demonstrate the library's usage.
+synopsis: A SOCKS5 (RFC 1928) implementation
+description:
+  This package provides a library with simple functions to create SOCKS5 clients and servers, along with a standalone server executable.
+  .
+  It supports all standard SOCKS5 commands (CONNECT, BIND, and UDP ASSOCIATE), Username/Password authentication (RFC 1929), and TLS-secured connections.
+
 license: BSD-3-Clause
 license-file: LICENSE
 author: Shi Rao
 maintainer: github@homovetus.com
--- copyright:
 category: Network
 build-type: Simple
 extra-doc-files: CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/homovetus/socks5
 
 common warnings
   ghc-options:
