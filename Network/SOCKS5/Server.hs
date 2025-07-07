@@ -14,10 +14,10 @@ import Control.Monad.State
 import Data.Bifunctor
 import Data.Binary (Binary, decode)
 import Data.ByteString qualified as B
-import Data.ByteString.Lazy qualified as LB
 import Data.Default
 import Data.IORef
 import Data.List.NonEmpty qualified as NE
+import Data.Text.Lazy qualified as LT
 import Network.Run.TCP
 import Network.SOCKS5.Internal
 import Network.Socket
@@ -31,7 +31,8 @@ data ServerConfig = ServerConfig
     serverPort :: ServiceName,
     useTLS :: Bool,
     certFile :: FilePath,
-    keyFile :: FilePath
+    keyFile :: FilePath,
+    users :: [(LT.Text, LT.Text)]
   }
 
 type StateIO a = StateT B.ByteString IO a
@@ -61,23 +62,42 @@ runSOCKS5Server config = do
                   }
           ctx <- contextNew sockTCP params
           handshake ctx
-          newClient ctx sockTCP
+          newClient config ctx sockTCP
           bye ctx
         else do
-          newClient sockTCP sockTCP
+          newClient config sockTCP sockTCP
 
-newClient :: (Connection c) => c -> Socket -> IO ()
-newClient conn clientSock = do
+newClient :: (Connection c) => ServerConfig -> c -> Socket -> IO ()
+newClient config conn clientSock = do
   void $ flip runStateT B.empty $ do
-    auths <- methods <$> recvS conn
-    unless (NoAuth `elem` auths) $ liftIO $ throwIO NoAcceptableAuthMethods
-    encodeAndSend conn $ MethodSelection NoAuth
+    handleAuthentication config conn
     req <- recvS conn
     liftIO $ putStrLn $ "Received SOCKS5 Request: " ++ show req
     case command req of
       Connect -> liftIO $ handleConnect req conn clientSock
       Bind -> liftIO $ handleBind req conn clientSock
       UDPAssociate -> liftIO $ handleUDPAssociate req conn clientSock
+
+handleAuthentication :: (Connection c) => ServerConfig -> c -> StateIO ()
+handleAuthentication config conn = do
+  auths <- methods <$> recvS conn
+  selectedMethod <-
+    if
+      | (UserPass `elem` auths) && not (null $ users config) -> do
+          encodeAndSend conn $ MethodSelection UserPass
+          return UserPass
+      | NoAuth `elem` auths -> do
+          encodeAndSend conn $ MethodSelection NoAuth
+          return NoAuth
+      | otherwise -> liftIO $ throwIO NoAcceptableAuthMethods
+  when (selectedMethod == UserPass) $ do
+    UserPassRequest uname passwd <- recvS conn
+    let credentials = (uname, passwd)
+    if credentials `elem` users config
+      then encodeAndSend conn $ UserPassResponse Success
+      else do
+        encodeAndSend conn $ UserPassResponse Failure
+        liftIO $ throwIO $ AuthFailed Failure
 
 handleConnect :: (Connection c) => Request -> c -> Socket -> IO ()
 handleConnect (Request _ addr port) conn clientSock = do
@@ -95,7 +115,7 @@ handleConnect (Request _ addr port) conn clientSock = do
       let forwardToClient = do
             serverData <- SB.recv destSock 4096
             unless (B.null serverData) $ do
-              connSend conn $ LB.fromStrict serverData
+              connSend conn $ B.fromStrict serverData
               forwardToClient
       concurrently_ forwardToDest forwardToClient
       putStrLn "Data forwarding complete. Closing dest connection."
@@ -120,7 +140,7 @@ handleBind (Request _ _destAddr _destPort) conn clientSock =
         let forwardToClient = do
               serverData <- SB.recv destSock 4096
               unless (B.null serverData) $ do
-                connSend conn $ LB.fromStrict serverData
+                connSend conn $ B.fromStrict serverData
                 forwardToClient
         concurrently_ forwardToDest forwardToClient
         putStrLn "Data forwarding complete. Closing dest connection."
@@ -175,7 +195,7 @@ forwardUDP expectedClientAddr expectedDestAddr relaySock = do
   -- Use an IORef to store the client address once received, we don't know port yet
   clientUDPSockAddr <- newIORef Nothing
   forever $ do
-    (datagram, sourceUDPSockAddr) <- first LB.fromStrict <$> SB.recvFrom relaySock 8192
+    (datagram, sourceUDPSockAddr) <- first B.fromStrict <$> SB.recvFrom relaySock 8192
     let (sourceUDPAddr, _) = fromSockAddr_ sourceUDPSockAddr
     -- sourceUDPAddr is used to compare only the address, not the port
     mClientSockAddr <- readIORef clientUDPSockAddr
@@ -194,7 +214,7 @@ forwardUDP expectedClientAddr expectedDestAddr relaySock = do
     handleClientPacket datagram = do
       let (UDPRequest _ addr port load) = decode datagram :: UDPRequest
       destAddr <- NE.head <$> getAddrInfo (Just defaultHints {addrSocketType = Datagram}) (Just $ show addr) (Just $ show port)
-      SB.sendAllTo relaySock (LB.toStrict load) (addrAddress destAddr)
+      SB.sendAllTo relaySock (B.toStrict load) (addrAddress destAddr)
     isExpectedDest addr = case expectedDestAddr of
       Nothing -> True
       Just destAddr -> addr == destAddr

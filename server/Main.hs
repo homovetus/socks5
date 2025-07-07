@@ -1,3 +1,4 @@
+import Data.Text.Lazy qualified as LT
 import Network.SOCKS5.Server
 import Options.Applicative
 
@@ -6,7 +7,9 @@ data Args = Args
     argPort :: String,
     argUseTLS :: Bool,
     argCertFile :: FilePath,
-    argKeyFile :: FilePath
+    argKeyFile :: FilePath,
+    argUsername :: Maybe String,
+    argPassword :: Maybe String
   }
 
 argsParser :: Parser Args
@@ -46,6 +49,22 @@ argsParser =
           <> showDefault
           <> help "The TLS private key file."
       )
+    <*> optional
+      ( strOption
+          ( long "username"
+              <> short 'u'
+              <> metavar "USERNAME"
+              <> help "The username for authentication."
+          )
+      )
+    <*> optional
+      ( strOption
+          ( long "password"
+              <> short 'P'
+              <> metavar "PASSWORD"
+              <> help "The password for authentication."
+          )
+      )
 
 main :: IO ()
 main = do
@@ -57,14 +76,17 @@ main = do
             <> progDesc "Run a SOCKS5 proxy server."
             <> header "socks5-server - A simple SOCKS5 proxy"
         )
-
+  let users = case (argUsername args, argPassword args) of
+        (Just user, Just pass) -> [(LT.pack user, LT.pack pass)]
+        _ -> []
   let serverConfig =
         ServerConfig
           { serverHost = argHost args,
             serverPort = argPort args,
             useTLS = argUseTLS args,
             certFile = argCertFile args,
-            keyFile = argKeyFile args
+            keyFile = argKeyFile args,
+            users = users
           }
 
   runSOCKS5Server serverConfig

@@ -26,12 +26,13 @@ withSOCKS5Server action = do
             serverPort = "10800",
             useTLS = False,
             certFile = "",
-            keyFile = ""
+            keyFile = "",
+            users = []
           }
   withAsync (runSOCKS5Server serverConfig) $ \_ -> do
     threadDelay 200000
     putStrLn "SOCKS5 server started. Running tests..."
-    result <- action $ ClientConfig "127.0.0.1" "10800" NoAuth
+    result <- action $ ClientConfig "127.0.0.1" "10800" [NoAuth] Nothing
     putStrLn "Tests finished. Stopping SOCKS5 server..."
     return result
 

@@ -16,6 +16,7 @@ import Control.Exception
 import Control.Monad.State
 import Data.Binary (Binary, decode)
 import Data.ByteString qualified as B
+import Data.Text.Lazy qualified as LT
 import Network.Run.TCP
 import Network.Run.UDP
 import Network.SOCKS5.Internal
@@ -27,7 +28,8 @@ import Text.Read (readMaybe)
 data ClientConfig = ClientConfig
   { proxyHost :: HostName,
     proxyPort :: ServiceName,
-    auth :: Method
+    auth :: [Method],
+    userPass :: Maybe (LT.Text, LT.Text)
   }
 
 type StateIO a = StateT B.ByteString IO a
@@ -177,10 +179,19 @@ startUDPAssociate config conn client =
 
 performAuth :: (Connection c) => ClientConfig -> c -> StateIO ()
 performAuth config conn = do
-  encodeAndSend conn $ Hello [auth config]
+  encodeAndSend conn $ Hello $ auth config
   selectedMethod <- recvS conn
   case method selectedMethod of
     NoAuth -> return ()
+    UserPass -> do
+      case userPass config of
+        Just (user, pass) -> do
+          encodeAndSend conn $ UserPassRequest user pass
+          response <- recvS conn
+          case response of
+            UserPassResponse Success -> return ()
+            UserPassResponse status -> liftIO $ throwIO $ AuthFailed status
+        _ -> liftIO $ throwIO AuthMissingCredentials
     _ -> liftIO $ throwIO $ AuthUnsupported (method selectedMethod)
 
 resolvePort :: ServiceName -> StateIO PortNumber
