@@ -15,3 +15,7 @@
 ## 0.4.0.0 -- 2025-07-07
 
 - UserPass authentication added, adjusted server API and CLI.
+
+## 0.5.0.0 -- 2025-07-07
+
+- Moved some types to separate file. Haddock documentation added. Default server port changed to 1080.

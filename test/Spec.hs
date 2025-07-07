@@ -12,6 +12,7 @@ import Network.Run.TCP
 import Network.SOCKS5.Client
 import Network.SOCKS5.Internal
 import Network.SOCKS5.Server
+import Network.SOCKS5.Types
 import Network.Socket
 import Network.Socket.ByteString
 import Test.Hspec

@@ -19,7 +19,7 @@ argsParser =
   Args
     <$> strOption
       ( long "host"
-          <> short 'h'
+          <> short 'H'
           <> metavar "HOSTNAME"
           <> value "0.0.0.0"
           <> showDefault
@@ -27,9 +27,9 @@ argsParser =
       )
     <*> strOption
       ( long "port"
-          <> short 'p'
+          <> short 'P'
           <> metavar "PORT"
-          <> value "10800"
+          <> value "1080"
           <> showDefault
           <> help "The port to listen on."
       )
