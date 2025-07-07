@@ -11,7 +11,6 @@ main = do
         ClientConfig
           { proxyHost = "127.0.0.1",
             proxyPort = "11451",
-            auth = [NoAuth],
             userPass = Nothing
           }
   let destAddr = AddressDomain "example.com"

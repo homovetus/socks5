@@ -19,3 +19,7 @@
 ## 0.5.0.0 -- 2025-07-07
 
 - Moved some types to separate file. Haddock documentation added. Default server port changed to 1080.
+
+## 0.6.0.0 -- 2025-07-08
+
+- Removed a record from client config. Rename test directory to tests. Added tests for TLS and UserPass authentication.

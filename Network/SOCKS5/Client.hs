@@ -17,7 +17,6 @@
 -- >         ClientConfig
 -- >           { proxyHost = "127.0.0.1",
 -- >             proxyPort = "11451",
--- >             auth = [NoAuth],
 -- >             userPass = Nothing
 -- >           }
 -- >   let destAddr = AddressDomain "example.com"
@@ -62,9 +61,7 @@ data ClientConfig = ClientConfig
     proxyHost :: HostName,
     -- | Port number of the SOCKS5 proxy server
     proxyPort :: ServiceName,
-    -- | List of authentication methods to use, only NoAuth and UserPass are supported
-    auth :: [Method],
-    -- | Username and password for UserPass authentication
+    -- | Username and password for UserPass authentication, `Nothing` will then use `NoAuth`
     userPass :: Maybe (LT.Text, LT.Text)
   }
 
@@ -246,7 +243,9 @@ startUDPAssociate config conn client =
 
 performAuth :: (Connection c) => ClientConfig -> c -> StateIO ()
 performAuth config conn = do
-  encodeAndSend conn $ Hello $ auth config
+  case userPass config of
+    Nothing -> encodeAndSend conn $ Hello [NoAuth]
+    Just _ -> encodeAndSend conn $ Hello [NoAuth, UserPass]
   selectedMethod <- recv' conn
   case method selectedMethod of
     NoAuth -> return ()
