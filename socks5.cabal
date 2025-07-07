@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name: socks5
-version: 0.6.0.0
+version: 0.6.0.1
 synopsis: A SOCKS5 (RFC 1928) implementation
 description:
   This package provides a library with simple functions to create SOCKS5 clients and servers, along with a standalone server executable.
@@ -64,7 +64,7 @@ executable socks5-example
   import: warnings
   main-is: Main.hs
   build-depends:
-    base ^>=4.18,
+    base >=4.18 && <5,
     bytestring ^>=0.12,
     network ^>=3.2,
     socks5,
@@ -84,7 +84,7 @@ test-suite socks5-test
 
   build-depends:
     async ^>=2.2,
-    base ^>=4.18,
+    base >=4.18 && <5,
     bytestring ^>=0.12,
     data-default ^>=0.8,
     hspec ^>=2.11,

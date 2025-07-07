@@ -23,3 +23,7 @@
 ## 0.6.0.0 -- 2025-07-08
 
 - Removed a record from client config. Rename test directory to tests. Added tests for TLS and UserPass authentication.
+
+## 0.6.0.1 -- 2025-07-08
+
+- Changed base requirement for example and tests
