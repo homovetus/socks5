@@ -1,9 +1,14 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Functions to run a SOCKS5 server.
 module Network.SOCKS5.Server
   ( ServerConfig (..),
+
+    -- * SOCKS5 Server
     runSOCKS5Server,
+
+    -- * SOCKS5 Server with TLS
     runSOCKS5ServerTLS,
   )
 where
@@ -26,13 +31,17 @@ import Network.TLS
 import System.IO.Error
 
 data ServerConfig = ServerConfig
-  { serverHost :: HostName,
+  { -- | Hostname or IP address to bind the server to
+    serverHost :: HostName,
+    -- | Port number to listen on
     serverPort :: ServiceName,
+    -- | List of User/Password pairs for UserPass authentication
     users :: [(LT.Text, LT.Text)]
   }
 
 type StateIO a = StateT B.ByteString IO a
 
+-- | Run a SOCKS5 server with the given configuration.
 runSOCKS5Server :: ServerConfig -> IO ()
 runSOCKS5Server config = do
   let host = serverHost config
@@ -44,6 +53,7 @@ runSOCKS5Server config = do
     handle (\(e :: SomeException) -> putStrLn $ show clientAddr ++ ": " ++ show e) $
       newClient config sockTCP sockTCP
 
+-- | Run a SOCKS5 server with TLS support.
 runSOCKS5ServerTLS :: ServerConfig -> ServerParams -> IO ()
 runSOCKS5ServerTLS config params = do
   let host = serverHost config

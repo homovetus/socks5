@@ -1,12 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Functions to start connection using SOCKS5 proxy.
 module Network.SOCKS5.Client
   ( ClientConfig (..),
+
+    -- * SOCKS5
     runTCPConnect,
-    runTCPConnectTLS,
     runTCPBind,
-    runTCPBindTLS,
     runUDPAssociate,
+
+    -- * SOCKS5 with TLS
+    runTCPConnectTLS,
+    runTCPBindTLS,
     runUDPAssociateTLS,
   )
 where
@@ -25,29 +30,44 @@ import Network.TLS
 import Text.Read (readMaybe)
 
 data ClientConfig = ClientConfig
-  { proxyHost :: HostName,
+  { -- | Hostname or IP address of the SOCKS5 proxy server
+    proxyHost :: HostName,
+    -- | Port number of the SOCKS5 proxy server
     proxyPort :: ServiceName,
+    -- | List of authentication methods to use, only NoAuth and UserPass are supported
     auth :: [Method],
+    -- | Username and password for UserPass authentication
     userPass :: Maybe (LT.Text, LT.Text)
   }
 
 type StateIO a = StateT B.ByteString IO a
 
+-- | Run a TCP connection to target address and port through proxy.
 runTCPConnect ::
+  -- | Destination address
   Address ->
+  -- | Destination port
   ServiceName ->
+  -- | Proxy configuration
   ClientConfig ->
+  -- | Client function to run with the connected socket
   (Socket -> IO a) ->
   IO a
 runTCPConnect destAddr destPort config client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
     startConnect destAddr destPort config sock client
 
+-- | Run a TCP connection to target address and port through proxy with TLS.
 runTCPConnectTLS ::
+  -- | Destination address
   Address ->
+  -- | Destination port
   ServiceName ->
+  -- | Proxy configuration
   ClientConfig ->
+  -- | TLS parameters for the connection
   ClientParams ->
+  -- | Client function to run with the connected TLS context
   (Context -> IO a) ->
   IO a
 runTCPConnectTLS destAddr destPort config params client = do
@@ -71,28 +91,41 @@ startConnect destAddr destPort config conn client =
     performAuth config conn
     portNum <- resolvePort destPort
     encodeAndSend conn $ Request Connect destAddr portNum
-    reply <- recvS conn
+    reply <- recv' conn
     case reply of
       Reply Succeeded _ _ -> liftIO $ client conn
       _ -> liftIO $ throwIO $ HandshakeFail reply
 
+-- | run a TCP connection to target by making proxy listen on a port and bind to it.
 runTCPBind ::
+  -- | Destination address
   Address ->
+  -- | Destination port
   ServiceName ->
+  -- | Proxy configuration
   ClientConfig ->
+  -- | Function to call when the bind is successful, receives the proxy's listening address and port
   (Address -> PortNumber -> IO ()) ->
+  -- | Client function to run with the bound socket, receives the connected peer's address and port
   (Address -> PortNumber -> Socket -> IO a) ->
   IO a
 runTCPBind destAddr destPort config notify client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
     startBind destAddr destPort config sock notify client
 
+-- | run a TCP connection to target by making proxy listen on a port and bind to it with TLS.
 runTCPBindTLS ::
+  -- | Destination address
   Address ->
+  -- | Destination port
   ServiceName ->
+  -- | Proxy configuration
   ClientConfig ->
+  -- | TLS parameters for the connection
   ClientParams ->
+  -- | Function to call when the bind is successful, receives the proxy's listening address and port
   (Address -> PortNumber -> IO ()) ->
+  -- | Client function to run with the bound TLS context, receives the connected peer's address and port
   (Address -> PortNumber -> Context -> IO a) ->
   IO a
 runTCPBindTLS destAddr destPort config params notify client = do
@@ -117,28 +150,35 @@ startBind destAddr destPort config conn notify client =
     performAuth config conn
     portNum <- resolvePort destPort
     encodeAndSend conn $ Request Bind destAddr portNum
-    reply1 <- recvS conn
+    reply1 <- recv' conn
     case reply1 of
       Reply Succeeded listenAddr listenPort -> do
         liftIO $ notify listenAddr listenPort
-        reply2 <- recvS conn
+        reply2 <- recv' conn
         case reply2 of
           Reply Succeeded hostAddr hostPort ->
             liftIO $ client hostAddr hostPort conn
           _ -> liftIO $ throwIO $ HandshakeFail reply2
       _ -> liftIO $ throwIO $ HandshakeFail reply1
 
+-- | Start a UDP relay on proxy server and run a client function with the connected UDP socket.
 runUDPAssociate ::
+  -- | Proxy configuration
   ClientConfig ->
+  -- | Client function to run with the connected UDP socket, receives a function to send data and a function to receive data
   ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
   IO a
 runUDPAssociate config client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sockTCP -> do
     startUDPAssociate config sockTCP client
 
+-- | Start a UDP relay on proxy server with TLS and run a client function with the connected UDP socket. Note that the UDP socket is not encrypted, only the initial connection to the proxy is secured.
 runUDPAssociateTLS ::
+  -- | Proxy configuration
   ClientConfig ->
+  -- | TLS parameters for the connection
   ClientParams ->
+  -- | Client function to run with the connected UDP socket, receives a function to send data and a function to receive data
   ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
   IO a
 runUDPAssociateTLS config params client = do
@@ -159,7 +199,7 @@ startUDPAssociate config conn client =
   flip evalStateT B.empty $ do
     performAuth config conn
     encodeAndSend conn $ Request UDPAssociate (AddressIPv4 "0.0.0.0") 0
-    reply <- recvS conn
+    reply <- recv' conn
     case reply of
       Reply Succeeded relayAddr relayPort -> liftIO $ do
         runUDPClient (show relayAddr) (show relayPort) $ \sockUDP proxySockAddr -> do
@@ -179,14 +219,14 @@ startUDPAssociate config conn client =
 performAuth :: (Connection c) => ClientConfig -> c -> StateIO ()
 performAuth config conn = do
   encodeAndSend conn $ Hello $ auth config
-  selectedMethod <- recvS conn
+  selectedMethod <- recv' conn
   case method selectedMethod of
     NoAuth -> return ()
     UserPass -> do
       case userPass config of
         Just (user, pass) -> do
           encodeAndSend conn $ UserPassRequest user pass
-          response <- recvS conn
+          response <- recv' conn
           case response of
             UserPassResponse Success -> return ()
             UserPassResponse status -> liftIO $ throwIO $ AuthFailed status
@@ -199,8 +239,8 @@ resolvePort port = liftIO $
     Just p -> return p
     Nothing -> throwIO $ PortStringInvalid port
 
-recvS :: (Binary b, Connection c) => c -> StateIO b
-recvS conn = do
+recv' :: (Binary b, Connection c) => c -> StateIO b
+recv' conn = do
   buffer <- get
   (val, left) <- recvAndDecode conn buffer
   put left
