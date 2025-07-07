@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name: socks5
-version: 0.1.0.0
+version: 0.4.0.0
 synopsis: SOCKS5 protocol library, supporting both client and server functionalities.
 description: This package provides an implementation of the SOCKS5 protocol (RFC 1928). It contains modules for creating SOCKS5 clients and servers. The library offers functions to add SOCKS5 proxy support to Haskell applications. A server executable is included to demonstrate the library's usage.
 license: BSD-3-Clause

@@ -2,7 +2,6 @@
 
 module Network.SOCKS5.Client
   ( ClientConfig (..),
-    SOCKSException (..),
     runTCPConnect,
     runTCPConnectTLS,
     runTCPBind,
