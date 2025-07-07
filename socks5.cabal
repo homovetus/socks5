@@ -4,7 +4,7 @@ version: 0.5.0.0
 synopsis: A SOCKS5 (RFC 1928) implementation
 description:
   This package provides a library with simple functions to create SOCKS5 clients and servers, along with a standalone server executable.
-  .
+
   It supports all standard SOCKS5 commands (CONNECT, BIND, and UDP ASSOCIATE), Username/Password authentication (RFC 1929), and TLS-secured connections.
 
 license: BSD-3-Clause
