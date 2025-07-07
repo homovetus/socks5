@@ -24,9 +24,6 @@ withSOCKS5Server action = do
         ServerConfig
           { serverHost = "0.0.0.0",
             serverPort = "10800",
-            useTLS = False,
-            certFile = "",
-            keyFile = "",
             users = []
           }
   withAsync (runSOCKS5Server serverConfig) $ \_ -> do

@@ -4,6 +4,7 @@
 module Network.SOCKS5.Server
   ( ServerConfig (..),
     runSOCKS5Server,
+    runSOCKS5ServerTLS,
   )
 where
 
@@ -14,7 +15,6 @@ import Control.Monad.State
 import Data.Bifunctor
 import Data.Binary (Binary, decode)
 import Data.ByteString qualified as B
-import Data.Default
 import Data.IORef
 import Data.List.NonEmpty qualified as NE
 import Data.Text.Lazy qualified as LT
@@ -23,15 +23,11 @@ import Network.SOCKS5.Internal
 import Network.Socket
 import Network.Socket.ByteString qualified as SB
 import Network.TLS
-import Network.TLS.Extra.Cipher
 import System.IO.Error
 
 data ServerConfig = ServerConfig
   { serverHost :: HostName,
     serverPort :: ServiceName,
-    useTLS :: Bool,
-    certFile :: FilePath,
-    keyFile :: FilePath,
     users :: [(LT.Text, LT.Text)]
   }
 
@@ -41,37 +37,32 @@ runSOCKS5Server :: ServerConfig -> IO ()
 runSOCKS5Server config = do
   let host = serverHost config
       port = serverPort config
-  putStrLn $ "Starting SOCKS5 server on " ++ host ++ ":" ++ port ++ " (TLS: " ++ show (useTLS config) ++ ")"
+  putStrLn $ "Starting SOCKS5 server on " ++ host ++ ":" ++ port
   runTCPServer (Just host) port $ \sockTCP -> do
     clientAddr <- getPeerName sockTCP
     putStrLn $ "Accepted new client connection from " ++ show clientAddr
     handle (\(e :: SomeException) -> putStrLn $ show clientAddr ++ ": " ++ show e) $
-      if useTLS config
-        then do
-          cred <- either error id <$> credentialLoadX509 (certFile config) (keyFile config)
-          let params =
-                (defaultParamsServer :: ServerParams)
-                  { serverShared =
-                      def
-                        { sharedCredentials = Credentials [cred]
-                        },
-                    serverSupported =
-                      def
-                        { supportedCiphers = ciphersuite_strong
-                        }
-                  }
-          ctx <- contextNew sockTCP params
-          handshake ctx
-          newClient config ctx sockTCP
-          bye ctx
-        else do
-          newClient config sockTCP sockTCP
+      newClient config sockTCP sockTCP
+
+runSOCKS5ServerTLS :: ServerConfig -> ServerParams -> IO ()
+runSOCKS5ServerTLS config params = do
+  let host = serverHost config
+      port = serverPort config
+  putStrLn $ "Starting SOCKS5 server on " ++ host ++ ":" ++ port ++ " (TLS: on)"
+  runTCPServer (Just host) port $ \sockTCP -> do
+    clientAddr <- getPeerName sockTCP
+    putStrLn $ "Accepted new client connection from " ++ show clientAddr
+    handle (\(e :: SomeException) -> putStrLn $ show clientAddr ++ ": " ++ show e) $ do
+      ctx <- contextNew sockTCP params
+      handshake ctx
+      newClient config ctx sockTCP
+      bye ctx
 
 newClient :: (Connection c) => ServerConfig -> c -> Socket -> IO ()
 newClient config conn clientSock = do
   void $ flip runStateT B.empty $ do
     handleAuthentication config conn
-    req <- recvS conn
+    req <- recv' conn
     liftIO $ putStrLn $ "Received SOCKS5 Request: " ++ show req
     case command req of
       Connect -> liftIO $ handleConnect req conn clientSock
@@ -80,18 +71,19 @@ newClient config conn clientSock = do
 
 handleAuthentication :: (Connection c) => ServerConfig -> c -> StateIO ()
 handleAuthentication config conn = do
-  auths <- methods <$> recvS conn
+  auths <- methods <$> recv' conn
+  let noUsers = null $ users config
   selectedMethod <-
     if
-      | (UserPass `elem` auths) && not (null $ users config) -> do
-          encodeAndSend conn $ MethodSelection UserPass
-          return UserPass
-      | NoAuth `elem` auths -> do
+      | NoAuth `elem` auths && noUsers -> do
           encodeAndSend conn $ MethodSelection NoAuth
           return NoAuth
+      | UserPass `elem` auths && not noUsers -> do
+          encodeAndSend conn $ MethodSelection UserPass
+          return UserPass
       | otherwise -> liftIO $ throwIO NoAcceptableAuthMethods
   when (selectedMethod == UserPass) $ do
-    UserPassRequest uname passwd <- recvS conn
+    UserPassRequest uname passwd <- recv' conn
     let credentials = (uname, passwd)
     if credentials `elem` users config
       then encodeAndSend conn $ UserPassResponse Success
@@ -222,8 +214,8 @@ forwardUDP expectedClientAddr expectedDestAddr relaySock = do
       let (remoteAddr, remotePort) = fromSockAddr_ sourceSockAddr
       sendUDPRequestTo relaySock 0 remoteAddr remotePort datagram clientSockAddr
 
-recvS :: (Binary b, Connection c) => c -> StateIO b
-recvS conn = do
+recv' :: (Binary b, Connection c) => c -> StateIO b
+recv' conn = do
   buffer <- get
   (val, left) <- liftIO $ recvAndDecode conn buffer
   put left
