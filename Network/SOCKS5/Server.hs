@@ -22,7 +22,6 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text.Lazy qualified as LT
 import Network.Run.TCP
 import Network.SOCKS5.Internal
-import Network.SOCKS5.Types
 import Network.Socket
 import Network.Socket.ByteString qualified as SB
 import Network.TLS

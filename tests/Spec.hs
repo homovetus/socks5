@@ -10,7 +10,6 @@ import Data.Default
 import Network.Run.TCP
 import Network.SOCKS5.Client
 import Network.SOCKS5.Server
-import Network.SOCKS5.Types
 import Network.Socket
 import Network.Socket.ByteString
 import Network.TLS
@@ -22,8 +21,8 @@ main = hspec $ do
   aroundAll withSOCKS5Server $ do
     describe "Network.SOCKS5.Client" $ do
       it "should run TCP connect successfully to ipinfo.io" $ \proxyConfig -> do
-        let destAddr = AddressDomain "ipinfo.io"
-            destPort = "80"
+        let destAddr = "ipinfo.io"
+            destPort = 80
         runTCPConnect destAddr destPort proxyConfig $ \sock -> do
           let request = C8.pack "GET / HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n"
           putStrLn "Sending HTTP GET request..."
@@ -37,8 +36,8 @@ main = hspec $ do
           response `shouldSatisfy` ("HTTP/1.1 200 OK" `B.isPrefixOf`)
 
       it "should run BIND command successfully" $ \proxyConfig -> do
-        let destAddr = AddressIPv4 "8.8.8.8"
-            destPort = "80"
+        let destAddr = "8.8.8.8"
+            destPort = 80
         runTCPBind
           destAddr
           destPort
@@ -47,7 +46,7 @@ main = hspec $ do
               void $ async $ do
                 threadDelay 200000
                 putStrLn $ "Third-party connector attempting to connect to " ++ show boundAddr ++ ":" ++ show boundPort
-                runTCPClient (show boundAddr) (show boundPort) $ \remoteSock -> do
+                runTCPClient boundAddr (show boundPort) $ \remoteSock -> do
                   putStrLn "Third-party connector: connection successful."
                   forever $ sendAll remoteSock "PING"
           )
@@ -79,8 +78,8 @@ main = hspec $ do
   aroundAll withSOCKS5ServerTLS $ do
     describe "Network.SOCKS5.Client" $ do
       it "should run TCP connect successfully to ipinfo.io with TLS" $ \(proxyConfig, clientParams) -> do
-        let destAddr = AddressDomain "ipinfo.io"
-            destPort = "80"
+        let destAddr = "ipinfo.io"
+            destPort = 80
         runTCPConnectTLS destAddr destPort proxyConfig clientParams $ \ctx -> do
           let request = C8.pack "GET / HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n"
           putStrLn "Sending HTTP GET request..."
@@ -94,8 +93,8 @@ main = hspec $ do
           response `shouldSatisfy` ("HTTP/1.1 200 OK" `B.isPrefixOf`)
 
       it "should run BIND command successfully with TLS" $ \(proxyConfig, clientParams) -> do
-        let destAddr = AddressIPv4 "8.8.8.8"
-            destPort = "80"
+        let destAddr = "8.8.8.8"
+            destPort = 80
         runTCPBindTLS
           destAddr
           destPort
@@ -105,7 +104,7 @@ main = hspec $ do
               void $ async $ do
                 threadDelay 200000
                 putStrLn $ "Third-party connector attempting to connect to " ++ show boundAddr ++ ":" ++ show boundPort
-                runTCPClient (show boundAddr) (show boundPort) $ \remoteSock -> do
+                runTCPClient boundAddr (show boundPort) $ \remoteSock -> do
                   putStrLn "Third-party connector: connection successful."
                   sendAll remoteSock "PING"
           )
