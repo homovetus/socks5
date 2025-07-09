@@ -1,14 +1,11 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Functions to run a SOCKS5 server.
+-- |
+-- This module provides a server implementation for the SOCKS5 proxy protocol.
 module Network.SOCKS5.Server
   ( ServerConfig (..),
-
-    -- * SOCKS5 Server
     runSOCKS5Server,
-
-    -- * SOCKS5 Server with TLS
     runSOCKS5ServerTLS,
   )
 where
@@ -31,12 +28,15 @@ import Network.Socket.ByteString qualified as SB
 import Network.TLS
 import System.IO.Error
 
+-- | Configuration for the SOCKS5 server.
 data ServerConfig = ServerConfig
-  { -- | Hostname or IP address to bind the server to
+  { -- | Hostname or IP address to bind the server to.
     serverHost :: HostName,
-    -- | Port number to listen on
+    -- | Port number to listen on.
     serverPort :: ServiceName,
     -- | List of User/Password pairs for UserPass authentication
+    --  If empty, only 'NoAuth' method will be available.
+    -- Otherwise, 'UserPass' authentication is required.
     users :: [(LT.Text, LT.Text)]
   }
 
@@ -54,8 +54,12 @@ runSOCKS5Server config = do
     handle (\(e :: SomeException) -> putStrLn $ show clientAddr ++ ": " ++ show e) $
       newClient config sockTCP sockTCP
 
--- | Run a SOCKS5 server with TLS support.
-runSOCKS5ServerTLS :: ServerConfig -> ServerParams -> IO ()
+-- | Run a SOCKS5 server with the control channel secured by TLS.
+runSOCKS5ServerTLS ::
+  ServerConfig ->
+  -- | TLS parameters for the server (e.g., certificate and key).
+  ServerParams ->
+  IO ()
 runSOCKS5ServerTLS config params = do
   let host = serverHost config
       port = serverPort config

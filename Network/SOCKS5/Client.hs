@@ -1,8 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Functions to start connection using SOCKS5 proxy.
+-- |
+-- This module provides a client for the SOCKS5 proxy protocol
+-- It offers two tiers of functions:
 --
--- Here is an minimal example of how to use the library to connect to a remote server through a SOCKS5 proxy:
+-- * High-level 'run...' functions: These are "all-in-one" helpers that
+--     manage the entire connection, from connecting to the proxy to running
+--     your client code.
+--
+-- * Low-level 'exec...' functions: These functions execute a single SOCKS5
+--     command on an already established connection. They provide more control
+--     for users who need to manage the connection to the proxy manually.
+--
+-- = Example Usage
+-- Here is a minimal example of how to use the library to connect to a remote server through a SOCKS5 proxy:
 --
 -- > {-# LANGUAGE OverloadedStrings #-}
 -- >
@@ -30,15 +41,20 @@
 module Network.SOCKS5.Client
   ( ClientConfig (..),
 
-    -- * SOCKS5
+    -- * High-level functions
     runTCPConnect,
     runTCPBind,
     runUDPAssociate,
 
-    -- * SOCKS5 with TLS
+    -- * High-level functions with TLS
     runTCPConnectTLS,
     runTCPBindTLS,
     runUDPAssociateTLS,
+
+    -- * Low-level functions
+    execConnect,
+    execBind,
+    execUDPAssociate,
   )
 where
 
@@ -56,121 +72,132 @@ import Network.Socket.ByteString qualified as SB
 import Network.TLS
 import Text.Read (readMaybe)
 
+-- | Configuration for connecting to the SOCKS5 proxy server.
 data ClientConfig = ClientConfig
-  { -- | Hostname or IP address of the SOCKS5 proxy server
+  { -- | Hostname or IP address of the SOCKS5 proxy server.
     proxyHost :: HostName,
-    -- | Port number of the SOCKS5 proxy server
+    -- | Port number of the SOCKS5 proxy server.
     proxyPort :: ServiceName,
-    -- | Username and password for UserPass authentication, `Nothing` will then use `NoAuth`
+    -- | Credentials for authentication. 'Nothing' defaults to the 'NoAuth' method.
+    -- Otherwise 'UserPass' will be used with the provided value.
     userPass :: Maybe (LT.Text, LT.Text)
   }
 
 type StateIO a = StateT B.ByteString IO a
 
--- | Run a TCP connection to target address and port through proxy.
+-- | Establishes a TCP connection to a target through a SOCKS5 proxy using the CONNECT command.
 runTCPConnect ::
-  -- | Destination address
+  -- | Target address.
   Address ->
-  -- | Destination port
+  -- | Target port.
   ServiceName ->
-  -- | Proxy configuration
+  -- | SOCKS5 proxy configuration.
   ClientConfig ->
-  -- | Client function to run with the connected socket
+  -- | The action to run with the connected 'Socket'.
   (Socket -> IO a) ->
   IO a
 runTCPConnect destAddr destPort config client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
-    startConnect destAddr destPort config sock client
+    execConnect destAddr destPort config sock
+    client sock
 
--- | Run a TCP connection to target address and port through proxy with TLS.
+-- | Establishes a TLS-secured TCP connection to a target through a SOCKS5 proxy using the CONNECT command.
 runTCPConnectTLS ::
-  -- | Destination address
   Address ->
-  -- | Destination port
   ServiceName ->
-  -- | Proxy configuration
   ClientConfig ->
-  -- | TLS parameters for the connection
+  -- | TLS parameters for the connection.
   ClientParams ->
-  -- | Client function to run with the connected TLS context
+  -- | The action to run with the TLS 'Context'.
   (Context -> IO a) ->
   IO a
 runTCPConnectTLS destAddr destPort config params client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
     ctx <- contextNew sock params
     handshake ctx
-    res <- startConnect destAddr destPort config ctx client
+    execConnect destAddr destPort config ctx
+    res <- client ctx
     bye ctx
     return res
 
-startConnect ::
+-- | Executes the CONNECT command on an established connection to the proxy.
+-- This function only performs the SOCKS5 negotiation.
+execConnect ::
   (Connection c) =>
+  -- | Target address
   Address ->
+  -- | Target port
   ServiceName ->
+  -- | SOCKS5 proxy configuration
   ClientConfig ->
+  -- | An existing connection to the proxy (e.g., a 'Socket' or 'Context')
   c ->
-  (c -> IO a) ->
-  IO a
-startConnect destAddr destPort config conn client =
+  IO ()
+execConnect destAddr destPort config conn =
   flip evalStateT B.empty $ do
     performAuth config conn
     portNum <- resolvePort destPort
     encodeAndSend conn $ Request Connect destAddr portNum
     reply <- recv' conn
     case reply of
-      Reply Succeeded _ _ -> liftIO $ client conn
+      Reply Succeeded _ _ -> return ()
       _ -> liftIO $ throwIO $ HandshakeFail reply
 
--- | run a TCP connection to target by making proxy listen on a port and bind to it.
+-- | Asks the SOCKS5 proxy to BIND to a port and waits for an incoming connection.
+-- This is for protocols that require the client to accept a connection, like FTP.
 runTCPBind ::
-  -- | Destination address
+  -- | The address the proxy should connect to (often ignored).
   Address ->
-  -- | Destination port
+  -- | The port the proxy should connect to (often ignored).
   ServiceName ->
-  -- | Proxy configuration
   ClientConfig ->
-  -- | Function to call when the bind is successful, receives the proxy's listening address and port
+  -- | An action called after the proxy successfully binds, providing the listening address and port.
   (Address -> PortNumber -> IO ()) ->
-  -- | Client function to run with the bound socket, receives the connected peer's address and port
+  -- | The action to run with the 'Socket' once a peer connects, providing the peer's address and port.
   (Address -> PortNumber -> Socket -> IO a) ->
   IO a
 runTCPBind destAddr destPort config notify client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
-    startBind destAddr destPort config sock notify client
+    (hostAddr, hostPort) <- execBind destAddr destPort config sock notify
+    client hostAddr hostPort sock
 
--- | run a TCP connection to target by making proxy listen on a port and bind to it with TLS.
+-- | Asks the SOCKS5 proxy to BIND over a TLS-secured connection.
 runTCPBindTLS ::
-  -- | Destination address
   Address ->
-  -- | Destination port
   ServiceName ->
-  -- | Proxy configuration
   ClientConfig ->
-  -- | TLS parameters for the connection
   ClientParams ->
-  -- | Function to call when the bind is successful, receives the proxy's listening address and port
+  -- | An action called after the proxy successfully binds, providing the listening address and port.
   (Address -> PortNumber -> IO ()) ->
-  -- | Client function to run with the bound TLS context, receives the connected peer's address and port
+  -- | The action to run with the 'Context' once a peer connects, providing the peer's address and port.
   (Address -> PortNumber -> Context -> IO a) ->
   IO a
 runTCPBindTLS destAddr destPort config params notify client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sock -> do
     ctx <- contextNew sock params
     handshake ctx
-    res <- startBind destAddr destPort config ctx notify client
+    (hostAddr, hostPort) <- execBind destAddr destPort config ctx notify
+    res <- client hostAddr hostPort ctx
     bye ctx
     return res
 
-startBind ::
+-- | Executes the BIND command on an established connection.
+-- This function handles the two-stage reply from the proxy.
+execBind ::
   (Connection c) =>
+  -- | The address the proxy should connect to (often ignored).
   Address ->
+  -- | The port the proxy should connect to (often ignored).
   ServiceName ->
+  -- | SOCKS5 proxy configuration.
   ClientConfig ->
+  -- | An existing connection to the proxy (e.g., a 'Socket' or 'Context').
   c ->
+  -- | An action called after the proxy successfully binds.
   (Address -> PortNumber -> IO ()) ->
-  (Address -> PortNumber -> c -> IO a) ->
-  IO a
-startBind destAddr destPort config conn notify client =
+  -- | Returns the address and port of the connecting peer.
+  IO (Address, PortNumber)
+execBind destAddr destPort config conn notify =
   flip evalStateT B.empty $ do
     performAuth config conn
     portNum <- resolvePort destPort
@@ -182,63 +209,75 @@ startBind destAddr destPort config conn notify client =
         reply2 <- recv' conn
         case reply2 of
           Reply Succeeded hostAddr hostPort ->
-            liftIO $ client hostAddr hostPort conn
+            return (hostAddr, hostPort)
           _ -> liftIO $ throwIO $ HandshakeFail reply2
       _ -> liftIO $ throwIO $ HandshakeFail reply1
 
--- | Start a UDP relay on proxy server and run a client function with the connected UDP socket.
+-- | Establishes a UDP ASSOCIATION with the SOCKS5 proxy, enabling UDP traffic to be relayed.
 runUDPAssociate ::
-  -- | Proxy configuration
   ClientConfig ->
-  -- | Client function to run with the connected UDP socket, receives a function to send data and a function to receive data
+  -- | Action to run with the connected UDP socket, providing function to send and receive datagrams.
   ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
   IO a
 runUDPAssociate config client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sockTCP -> do
-    startUDPAssociate config sockTCP client
+    (relayAddr, relayPort) <- execUDPAssociate config sockTCP
+    runUDPClient (show relayAddr) (show relayPort) $ \sockUDP proxySockAddr -> do
+      let sendDataTo :: B.ByteString -> SockAddr -> IO ()
+          sendDataTo userData destination = do
+            let (dstAddr, dstPort) = fromSockAddr_ destination
+            sendUDPRequestTo sockUDP 0 dstAddr dstPort (B.fromStrict userData) proxySockAddr
+          recvDataFrom :: IO (B.ByteString, SockAddr)
+          recvDataFrom = do
+            (datagram, _) <- SB.recvFrom sockUDP 8192
+            let udpReply = decode (B.fromStrict datagram) :: UDPRequest
+                originalSender = toSockAddr_ (address udpReply) (port udpReply)
+            return (B.toStrict (payload udpReply), originalSender)
+      client sendDataTo recvDataFrom
 
--- | Start a UDP relay on proxy server with TLS and run a client function with the connected UDP socket. Note that the UDP socket is not encrypted, only the initial connection to the proxy is secured.
+-- | Establishes a UDP association over a TLS-secured control connection.
+-- Note: The control connection to the proxy is secured with TLS, but the resulting
+-- UDP traffic is not encrypted.
 runUDPAssociateTLS ::
-  -- | Proxy configuration
   ClientConfig ->
-  -- | TLS parameters for the connection
   ClientParams ->
-  -- | Client function to run with the connected UDP socket, receives a function to send data and a function to receive data
+  -- | Action to run with the connected UDP socket, providing function to send and receive datagrams.
   ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
   IO a
 runUDPAssociateTLS config params client = do
   runTCPClient (proxyHost config) (proxyPort config) $ \sockTCP -> do
     ctx <- contextNew sockTCP params
     handshake ctx
-    res <- startUDPAssociate config ctx client
+    (relayAddr, relayPort) <- execUDPAssociate config ctx
+    res <- runUDPClient (show relayAddr) (show relayPort) $ \sockUDP proxySockAddr -> do
+      let sendDataTo :: B.ByteString -> SockAddr -> IO ()
+          sendDataTo userData destination = do
+            let (dstAddr, dstPort) = fromSockAddr_ destination
+            sendUDPRequestTo sockUDP 0 dstAddr dstPort (B.fromStrict userData) proxySockAddr
+          recvDataFrom :: IO (B.ByteString, SockAddr)
+          recvDataFrom = do
+            (datagram, _) <- SB.recvFrom sockUDP 8192
+            let udpReply = decode (B.fromStrict datagram) :: UDPRequest
+                originalSender = toSockAddr_ (address udpReply) (port udpReply)
+            return (B.toStrict (payload udpReply), originalSender)
+      client sendDataTo recvDataFrom
     bye ctx
     return res
 
-startUDPAssociate ::
+-- | Executes the UDP ASSOCIATE command on an established connection.
+execUDPAssociate ::
   (Connection c) =>
   ClientConfig ->
   c ->
-  ((B.ByteString -> SockAddr -> IO ()) -> IO (B.ByteString, SockAddr) -> IO a) ->
-  IO a
-startUDPAssociate config conn client =
+  -- | Returns the address and port of the UDP relay on the proxy server.
+  IO (Address, PortNumber)
+execUDPAssociate config conn =
   flip evalStateT B.empty $ do
     performAuth config conn
     encodeAndSend conn $ Request UDPAssociate (AddressIPv4 "0.0.0.0") 0
     reply <- recv' conn
     case reply of
-      Reply Succeeded relayAddr relayPort -> liftIO $ do
-        runUDPClient (show relayAddr) (show relayPort) $ \sockUDP proxySockAddr -> do
-          let sendDataTo :: B.ByteString -> SockAddr -> IO ()
-              sendDataTo userData destination = do
-                let (dstAddr, dstPort) = fromSockAddr_ destination
-                sendUDPRequestTo sockUDP 0 dstAddr dstPort (B.fromStrict userData) proxySockAddr
-              recvDataFrom :: IO (B.ByteString, SockAddr)
-              recvDataFrom = do
-                (datagram, _) <- SB.recvFrom sockUDP 8192
-                let udpReply = decode (B.fromStrict datagram) :: UDPRequest
-                    originalSender = toSockAddr_ (address udpReply) (port udpReply)
-                return (B.toStrict (payload udpReply), originalSender)
-          client sendDataTo recvDataFrom
+      Reply Succeeded relayAddr relayPort -> return (relayAddr, relayPort)
       _ -> liftIO $ throwIO $ HandshakeFail reply
 
 performAuth :: (Connection c) => ClientConfig -> c -> StateIO ()
